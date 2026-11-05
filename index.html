@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -18,38 +17,94 @@
     }
 
     .container {
-      max-width: 500px;
-      margin: 60px auto;
+      max-width: 550px;
+      margin: 50px auto;
       padding: 30px;
       background: white;
       border-radius: 12px;
       box-shadow: 0 3px 15px rgba(0,0,0,.08);
-      text-align: center;
     }
 
     h2 { margin-top: 0; }
 
-    p { color: #64748b; }
+    .subtitle {
+      color: #64748b;
+      font-size: 14px;
+    }
 
-    #googleButton {
-      display: flex;
-      justify-content: center;
-      margin-top: 25px;
+    input[type="file"] {
+      width: 100%;
+      margin: 20px 0;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 8px;
+      background: #1769aa;
+      color: white;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      background: #9aa8b6;
+    }
+
+    #preview {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin: 20px 0;
+    }
+
+    .photo {
+      width: 100%;
+      height: 110px;
+      object-fit: cover;
+      border-radius: 7px;
     }
 
     #status {
-      margin-top: 20px;
+      margin-top: 18px;
       font-size: 14px;
+      text-align: center;
     }
+
+    #uploadArea { display: none; }
   </style>
 </head>
 
 <body>
   <div class="container">
     <h2>Cleaners Control</h2>
-    <p>Sign in with your Google account to continue.</p>
+
+    <p class="subtitle" id="instruction">
+      Sign in with your Google account to continue.
+    </p>
 
     <div id="googleButton"></div>
+
+    <div id="uploadArea">
+      <p><strong>Select your service photos</strong></p>
+
+      <input
+        type="file"
+        id="photos"
+        accept="image/jpeg,image/png,image/webp"
+        multiple
+        onchange="showPreview()"
+      >
+
+      <div id="preview"></div>
+
+      <button id="uploadButton" onclick="uploadPhotos()">
+        Upload Photos
+      </button>
+    </div>
+
     <div id="status"></div>
   </div>
 
@@ -57,16 +112,30 @@
     const GOOGLE_CLIENT_ID =
       '385603379228-7cjt4svu3edc5oo9ls79c6bvgtvcrlg0.apps.googleusercontent.com';
 
-    function handleCredentialResponse(response) {
-      document.getElementById('status').textContent =
-        'Google sign-in successful. Preparing the photo upload...';
+    const BACKEND_URL =
+      'https://script.google.com/macros/s/AKfycbxJsp1XFU-cHbwPoLnOdRxYWe4xtMJtgZDSFi1opyxgjNIUHW9aCZeDdqOj92RxbLjx/exec';
 
-      // We will validate this credential securely on the backend
-      // before allowing any photo upload.
-      console.log('Google credential received.');
+    const SERVICE_ID =
+      new URLSearchParams(window.location.search).get('serviceId');
+
+    let googleCredential = null;
+
+    function handleCredentialResponse(response) {
+      googleCredential = response.credential;
+
+      document.getElementById('googleButton').style.display = 'none';
+      document.getElementById('uploadArea').style.display = 'block';
+
+      document.getElementById('instruction').textContent =
+        'Select the photos for your service.';
+
+      document.getElementById('status').textContent =
+        SERVICE_ID
+          ? 'Google sign-in successful.'
+          : 'Error: Service ID is missing.';
     }
 
-    window.onload = function () {
+    window.onload = function() {
       google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
         callback: handleCredentialResponse
@@ -77,12 +146,119 @@
         {
           theme: 'outline',
           size: 'large',
-          shape: 'rectangular',
           text: 'signin_with',
           width: 280
         }
       );
     };
+
+    function showPreview() {
+      const files = document.getElementById('photos').files;
+      const preview = document.getElementById('preview');
+
+      preview.innerHTML = '';
+
+      if (files.length > 10) {
+        document.getElementById('status').textContent =
+          'Maximum 10 photos allowed.';
+        return;
+      }
+
+      document.getElementById('status').textContent =
+        files.length + ' photo(s) selected.';
+
+      Array.from(files).forEach(file => {
+        const img = document.createElement('img');
+        img.className = 'photo';
+        img.src = URL.createObjectURL(file);
+        preview.appendChild(img);
+      });
+    }
+
+    function readFile(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = () => resolve({
+          name: file.name,
+          mimeType: file.type,
+          data: reader.result.split(',')[1]
+        });
+
+        reader.onerror = () =>
+          reject(new Error('Could not read ' + file.name));
+
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function uploadPhotos() {
+      const files = Array.from(
+        document.getElementById('photos').files
+      );
+
+      const button = document.getElementById('uploadButton');
+      const status = document.getElementById('status');
+
+      if (!googleCredential || !SERVICE_ID) {
+        status.textContent = 'Authentication or service information is missing.';
+        return;
+      }
+
+      if (!files.length || files.length > 10) {
+        status.textContent = 'Select between 1 and 10 photos.';
+        return;
+      }
+
+      if (files.some(file =>
+        !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
+      )) {
+        status.textContent = 'Only JPEG, PNG and WEBP are allowed.';
+        return;
+      }
+
+      if (files.some(file => file.size > 5 * 1024 * 1024)) {
+        status.textContent = 'Each photo must be 5 MB or smaller.';
+        return;
+      }
+
+      button.disabled = true;
+      status.textContent = 'Preparing photos...';
+
+      try {
+        const photos = await Promise.all(files.map(readFile));
+
+        status.textContent = 'Sending photos...';
+
+        const response = await fetch(BACKEND_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'text/plain;charset=utf-8'
+          },
+          body: JSON.stringify({
+            credential: googleCredential,
+            serviceId: SERVICE_ID,
+            photos: photos
+          })
+        });
+
+        const result = await response.json();
+
+        if (!result.success) {
+          throw new Error(result.message || 'Upload failed.');
+        }
+
+        status.textContent = result.message;
+        document.getElementById('photos').value = '';
+        document.getElementById('preview').innerHTML = '';
+
+      } catch (error) {
+        status.textContent =
+          'Upload error: ' + error.message;
+      } finally {
+        button.disabled = false;
+      }
+    }
   </script>
 </body>
 </html>
